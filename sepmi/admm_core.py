@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+import scipy.linalg as la
 
 def _csc(M):
     return M if sp.isspmatrix_csc(M) else M.tocsc()
@@ -20,6 +21,35 @@ class NormalEqSolver:
 
     def solve(self, rhs):
         return self._solve(rhs)
+
+class WoodburySolver:
+    """
+    Solve (P + rho I + beta A^T A) x = rhs via Woodbury:
+        H = P + rho I
+        (H + beta A^T A)^{-1} = H^{-1} - H^{-1} A^T (I + beta A H^{-1} A^T)^{-1} beta A H^{-1}
+    Use when m = rows(A) is small/moderate.
+    """
+    def __init__(self, P, A, rho=1.0, beta=1.0):
+        P = _csc(P); A = _csc(A)
+        n = P.shape[0]
+        I = sp.identity(n, format="csc")
+        H = (P + rho * I).tocsc()
+        self._Hsolve = spla.factorized(H)
+        self.A = A
+        self.beta = float(beta)
+
+        # Precompute X = H^{-1} A^T (n x m), and dense Schur S = I + beta * A X (m x m)
+        AT = A.T.toarray()            # (n, m) RHS (dense)
+        self.X = self._Hsolve(AT)     # (n, m)
+        S = np.eye(A.shape[0]) + self.beta * (A @ self.X)   # (m, m) dense SPD
+        self._S_cho = la.cho_factor(S, lower=True, check_finite=False)
+
+    def solve(self, rhs):
+        y = self._Hsolve(rhs)                              # H^{-1} rhs
+        t = self.beta * (self.A @ y)                       # (m,)
+        s = la.cho_solve(self._S_cho, t, check_finite=False)  # (m,)
+        return y - self.X @ s
+
 
 def admm_solve(P, q, *, A=None, b=None, prox_z=None,
                rho=1.0, beta=5.0, alpha=1.6,
@@ -46,7 +76,15 @@ def admm_solve(P, q, *, A=None, b=None, prox_z=None,
         u = warm.get("u", np.zeros(n)).copy()
         y = warm.get("y", np.zeros(m)).copy()
 
-    lin = NormalEqSolver(P, A, rho=rho, beta=beta)
+    def _choose_solver(P, A, rho, beta):
+        if A is not None:
+            m, n = A.shape[0], P.shape[0]
+            # Use Woodbury when equality count is modest vs n
+            if m > 0 and (m <= 2000 and m <= n // 4):
+                return WoodburySolver(P, A, rho=rho, beta=beta)
+        return NormalEqSolver(P, A, rho=rho, beta=beta)
+
+    lin = _choose_solver(P, A, rho, beta)
 
     def objective(x_, z_):
         return 0.5 * x_ @ (P @ x_) + q @ x_  # (we don’t try to evaluate sum g_i here)
@@ -71,6 +109,23 @@ def admm_solve(P, q, *, A=None, b=None, prox_z=None,
         dua = rho * np.linalg.norm(z - v)
         eqr = np.linalg.norm(A @ x - b) if m else 0.0
 
+        # --- simple residual balancing (every 25 iters)
+        if k % 25 == 0:
+            # Avoid divide-by-zero
+            pr = max(pri, 1e-12)
+            dr = max(dua, 1e-12)
+            ratio = pr / dr
+            new_rho = rho
+            if ratio > 10.0:
+                new_rho = min(1e6, rho * 2.0)
+            elif ratio < 0.1:
+                new_rho = max(1e-6, rho / 2.0)
+            if new_rho != rho:
+                rho = new_rho
+                # Rebuild linear solver with new rho (keep same beta)
+                lin = _choose_solver(P, A, rho, beta)
+
+
         eps_pri = atol*np.sqrt(n) + rtol*max(np.linalg.norm(x), np.linalg.norm(z))
         eps_dua = atol*np.sqrt(n) + rtol*np.linalg.norm(u)
         eq_tol  = (atol*np.sqrt(m) + rtol*np.linalg.norm(b)) if m else 0.0
@@ -83,3 +138,5 @@ def admm_solve(P, q, *, A=None, b=None, prox_z=None,
 
     return {"x": x, "z": z, "u": u, "y": y, "iters": k,
             "pri_res": pri, "dual_res": dua, "eq_res": eqr}
+
+

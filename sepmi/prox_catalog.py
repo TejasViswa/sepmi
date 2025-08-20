@@ -30,6 +30,36 @@ def prox_card(v, t, *, weight=1.0):
     z[np.abs(v) <= thr] = 0.0
     return z
 
+def prox_huber(v, t, *, delta=1.0, weight=1.0):
+    """
+    prox_{t * weight * Huber_delta}(v)
+    Huber(z) = 0.5 z^2          if |z| <= delta
+               delta*(|z|-0.5*delta) otherwise
+    Closed form per component.
+    """
+    tau = t * weight
+    z = v.copy()
+    # For |v| <= delta + tau  -> quadratic regime shrinkage
+    a = delta + tau
+    mask_q = np.abs(v) <= a
+    z[mask_q] = v[mask_q] / (1.0 + tau)
+    # For |v| > a -> linear regime soft-threshold by tau*delta
+    s = np.sign(v[~mask_q])
+    z[~mask_q] = v[~mask_q] - s * (tau * delta)
+    return z
+
+def prox_group_l2(v, t, *, weight=1.0):
+    """
+    Block soft-threshold on the WHOLE slice passed in v.
+    z = (1 - (t*weight)/||v||_2)_+ v
+    """
+    nrm = np.linalg.norm(v)
+    if nrm == 0.0:
+        return v
+    scale = max(0.0, 1.0 - (t*weight)/nrm)
+    return scale * v
+
+
 # registry (name -> function)
 PROX_REGISTRY = {
     "abs": prox_abs,              # L1
@@ -37,6 +67,8 @@ PROX_REGISTRY = {
     "is_bound": prox_is_bound,    # lb <= x <= ub
     "is_zero": prox_is_zero,      # x = 0
     "card": prox_card,            # L0 (heuristic)
+    "huber": prox_huber,          # Huber
+    "group_l2": prox_group_l2,    # Group L2
 }
 
 def make_dispatch_from_gspec(n, gspec):
