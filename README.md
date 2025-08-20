@@ -1,5 +1,3 @@
-# sepmi
+# sepmi (from-scratch)
 
-MVP of a separable ADMM solver.
-# sepmi
-# sepmi
+Tiny separable ADMM solver in pure Python.
