@@ -61,13 +61,14 @@ def run_case(tag, data, solver, iters=150, rho=1.0, beta=2.0, alpha=1.6):
         profile=True,                  # record times internally
         profile_interval=25,           # <- no [stats] lines
         print_header=False,            # <- no header
-        solver=solver                  # requires passthrough in qssmini/admm_solve
+        solver=solver
     )
     t1 = time.perf_counter()
     print(f"[{tag:20s}] solver={solver:8s}  iters={res['iters']:4d}  "
-          f"time={t1-t0:6.3f}s  factor={res['stats']['factor_time']:6.3f}s  "
+          f"time={t1-t0:6.3f}s  factor={res['stats'].get('factor_time',0.0):6.3f}s  "
           f"pri={res['pri_res']:.2e} eq={res['eq_res']:.2e}")
     return res, t1 - t0
+
 
 def main():
     # ---------- Case A: few equalities (Woodbury should shine) ----------
@@ -75,21 +76,13 @@ def main():
     data_small = make_problem(nA, mA, lam=0.05, density=densA)
     print("\n=== Case A: few equalities (m << n) ===")
     run_case("few-eq / woodbury", data_small, solver="woodbury")
-    # run_case("few-eq / normal  ", data_small, solver="normal")
-    # run_case("few-eq / kkt     ", data_small, solver="kkt")
-    # run_case("few-eq / normal_cholmod", data_small, solver="normal_cholmod")
-    # run_case("few-eq / kkt_mumps", data_small, solver="kkt_mumps")
     run_case("few-eq / kkt_petsc", data_small, solver="kkt_petsc")
 
     # ---------- Case B: many equalities (tractable & fair) ----------
-    # Smaller n, moderate m, sparser A, and we DO NOT run Woodbury here.
     nB, mB, densB = 15000, 3000, 0.001
     data_large = make_problem(nB, mB, lam=0.05, density=densB)
     print("\n=== Case B: many equalities (skip Woodbury) ===")
-    # run_case("many-eq / kkt     ", data_large, solver="kkt")
-    # run_case("many-eq / normal  ", data_large, solver="normal")
     run_case("many-eq / normal_cholmod", data_large, solver="normal_cholmod")
-    # run_case("many-eq / kkt_mumps", data_large, solver="kkt_mumps")
     run_case("many-eq / kkt_petsc", data_large, solver="kkt_petsc")
     
     # ---------- Case C: n=5000, no equalities (SPD) ----------
